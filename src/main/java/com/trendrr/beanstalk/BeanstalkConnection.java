@@ -9,6 +9,8 @@ import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.NotYetConnectedException;
 import java.nio.channels.SocketChannel;
+import java.nio.channels.Channels;
+import java.nio.channels.ReadableByteChannel;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -27,12 +29,16 @@ public class BeanstalkConnection {
 	
 	private SocketChannel channel;
 	private ByteArrayOutputStream outbuf = new ByteArrayOutputStream();
-	
+	private ReadableByteChannel wrappedReadChannel;
+	public static final int SOCKET_TIMEOUT_IN_MS = 30000;
+
 	public void connect(String addr, int port) throws BeanstalkException {
 		try {
 			this.channel = SocketChannel.open();
 			this.channel.connect(new InetSocketAddress(addr, port));
 			this.channel.finishConnect();
+			this.channel.socket().setSoTimeout(SOCKET_TIMEOUT_IN_MS);
+			this.wrappedReadChannel = Channels.newChannel(channel.socket().getInputStream());
 		} catch (Exception x) {
 			throw new BeanstalkException(x);
 		}
@@ -44,7 +50,13 @@ public class BeanstalkConnection {
 		} catch (Exception x) {
 			log.debug("Caught", x);
 		}
-		
+
+		try {
+			wrappedReadChannel.close();
+		} catch (Exception x) {
+			log.debug("Caught", x);
+		}
+
 		try {
 			channel.close();
 		} catch (Exception x) {
@@ -106,9 +118,8 @@ public class BeanstalkConnection {
 			if (count > 10000) {
 				throw new BeanstalkException("OH Snap, nothing to read from the buffer for 100 seconds!");
 			}
-			
 			try {
-				if (channel.read(buf) == 0) {
+				if (wrappedReadChannel.read(buf) == 0) {
 					log.warn("Nothing in the buffer, sleeping for 100 millis, will try again");
 					try {
 						Thread.sleep(100);
@@ -178,7 +189,7 @@ public class BeanstalkConnection {
 			//then read the bytes waiting in the channel.
 			ByteBuffer buf = ByteBuffer.allocate(4096);
 			try {
-				numRead = channel.read(buf);
+				numRead = wrappedReadChannel.read(buf);
 			} catch (Exception x) {
 				this.throwException(x);
 			}
